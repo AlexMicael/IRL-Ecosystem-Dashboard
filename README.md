@@ -56,4 +56,4 @@ If you want to run this dashboard on your own machine:
 
 ## Acknowledgments
 
-This work was supported by Professor Yang and the CS 415/515 staff at Binghamton University. We also thank the Computer Science Department for providing the virtual machine resources used for the data collection pipeline.
+This work was supported by Professor Yang at Binghamton University. We also thank the Computer Science Department for providing the virtual machine resources used for the data collection pipeline.
