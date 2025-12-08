@@ -181,6 +181,8 @@ st.sidebar.info(
 if page == "Dashboard Home":
     st.title("IRL Streaming Ecosystem Dashboard")
     st.markdown("""
+    **Authors:** Alex Chen Hsieh & Derek Li
+                
     Welcome to the interactive data explorer for our CS 415 Project. This dashboard provides a live view into our collected dataset
     and allows you to explore the research questions defined in Project 2.
     """)
@@ -237,7 +239,7 @@ if page == "Dashboard Home":
             tooltip=['date', 'count', 'source']
         ).interactive()
         
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width='stretch')
     else:
         st.info("No data available to display.")
 
@@ -257,7 +259,7 @@ if page == "Dashboard Home":
             y=alt.Y('count()', title='Count')
         ).properties(title=f"Distribution of Comment Toxicity (Sample: {sample_size:,} comments)")
         
-        st.altair_chart(hist_chart, use_container_width=True)
+        st.altair_chart(hist_chart, width='stretch')
     else:
         st.warning("No comment data for toxicity histogram.")
 
@@ -282,7 +284,7 @@ if page == "Dashboard Home":
                 tooltip=['display_name', 'avg_viewers', 'comment_count']
             ).properties(title="Twitch Viewership vs. YouTube Engagement").interactive()
             
-            st.altair_chart(scatter_chart, use_container_width=True)
+            st.altair_chart(scatter_chart, width='stretch')
 
     st.subheader("Top Content Keywords")
     col_a, col_b = st.columns(2)
@@ -303,7 +305,7 @@ if page == "Dashboard Home":
                     x=alt.X('count', title='Frequency'),
                     y=alt.Y('word', sort='-x', title='Keyword')
                 )
-                st.altair_chart(bar_twitch, use_container_width=True)
+                st.altair_chart(bar_twitch, width='stretch')
             except:
                 st.info("Not enough text data for analysis.")
 
@@ -320,7 +322,7 @@ if page == "Dashboard Home":
                     x=alt.X('count', title='Frequency'),
                     y=alt.Y('word', sort='-x', title='Keyword')
                 )
-                st.altair_chart(bar_yt, use_container_width=True)
+                st.altair_chart(bar_yt, width='stretch')
             except:
                 st.info("Not enough text data for analysis.")
 
@@ -362,7 +364,7 @@ elif page == "RQ1: Temporal Toxicity":
         base = alt.Chart(timeline).encode(x='published_at:T')
         line = base.mark_line(color='red').encode(y=alt.Y('avg_toxicity', title='Avg Toxicity'))
         bar = base.mark_bar(opacity=0.3).encode(y=alt.Y('comment_volume', title='Volume'))
-        st.altair_chart(alt.layer(bar, line).resolve_scale(y='independent').interactive(), use_container_width=True)
+        st.altair_chart(alt.layer(bar, line).resolve_scale(y='independent').interactive(), width='stretch')
 
         st.markdown("### Insights")
         st.write(f"Showing analysis for **{len(df)}** comments.")
@@ -434,7 +436,7 @@ elif page == "RQ2: Cross-Platform Predictor":
                 ).interactive()
                 
                 reg_line = scatter.transform_regression(x_metric, y_metric).mark_line(color='red')
-                st.altair_chart(scatter + reg_line, use_container_width=True)
+                st.altair_chart(scatter + reg_line, width='stretch')
                 
                 st.markdown("### Creator Data")
                 st.dataframe(plot_data[['display_name', x_metric, y_metric]].sort_values(x_metric, ascending=False))
@@ -484,7 +486,7 @@ elif page == "RQ3: Content Themes":
         chart = alt.Chart(chart_data).transform_density(
             'comment_count', as_=['comment_count', 'density'], groupby=['Type']
         ).mark_area(opacity=0.5).encode(x='comment_count:Q', y='density:Q', color='Type:N')
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width='stretch')
         
         st.subheader(f"Co-occurring Keywords with '{keyword}'")
         try:
@@ -496,7 +498,7 @@ elif page == "RQ3: Content Themes":
                 words = words[words['word'] != keyword].sort_values('count', ascending=False)
                 
                 bar = alt.Chart(words).mark_bar().encode(x='count:Q', y=alt.Y('word:N', sort='-x'))
-                st.altair_chart(bar, use_container_width=True)
+                st.altair_chart(bar, width='stretch')
         except:
             st.info("Not enough data for keyword analysis.")
 
