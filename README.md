@@ -38,7 +38,7 @@ If you want to run this dashboard on your own machine:
 1. **Clone the repository:**
 
     ``` sh
-    git clone https://github.com/AlexMicael/IRL-Ecosystem-Dashboard
+    git clone https://github.com/AlexMicael/IRL-Ecosystem-Dashboard.git
     cd IRL-Ecosystem-Dashboard
     ```
 
