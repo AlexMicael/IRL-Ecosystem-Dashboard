@@ -17,11 +17,16 @@ st.set_page_config(
 # --- DATA LOADING  ---
 @st.cache_data
 def load_data():
-    """Loads and pre-processes all datasets."""
+    """Loads and pre-processes all datasets with memory optimization."""
     try:
-        # Twitch Stream Snapshots
-        twitch_df = pd.read_parquet("data/twitch_streams_data.parquet")
+        # Twitch Stream Snapshots - only load essential columns
+        twitch_df = pd.read_parquet("data/twitch_streams_data.parquet", 
+                                     columns=['user_id', 'viewer_count', 'collection_timestamp', 
+                                             'stream_title', 'started_at'])
         twitch_df['collection_timestamp'] = pd.to_datetime(twitch_df['collection_timestamp'], utc=True).dt.tz_localize(None)
+        
+        # Optimize data types
+        twitch_df['viewer_count'] = pd.to_numeric(twitch_df['viewer_count'], downcast='integer')
         
         # Twitch Users
         users_df = pd.read_parquet("data/twitch_users_data.parquet")
@@ -33,21 +38,65 @@ def load_data():
         # Streamer Mapping
         map_df = pd.read_parquet("data/streamer_map.parquet")
 
-        # YouTube Comments (Split into 2 Parts)
+        # YouTube Comments (Split into 2 Parts) - load in chunks
         comments_part1 = pd.read_parquet("data/youtube_comments_data_part1.parquet")
         comments_part2 = pd.read_parquet("data/youtube_comments_data_part2.parquet")
-        comments_df = pd.concat([comments_part1, comments_part2])
+        comments_df = pd.concat([comments_part1, comments_part2], ignore_index=True)
+        
+        # Free up memory
+        del comments_part1, comments_part2
+        
         comments_df['published_at'] = pd.to_datetime(comments_df['published_at'], utc=True, errors='coerce').dt.tz_localize(None)
+        
+        # Optimize comment data types
+        if 'toxicity_score' in comments_df.columns:
+            comments_df['toxicity_score'] = pd.to_numeric(comments_df['toxicity_score'], downcast='float')
+        if 'like_count' in comments_df.columns:
+            comments_df['like_count'] = pd.to_numeric(comments_df['like_count'], downcast='integer')
         
         return twitch_df, users_df, videos_df, comments_df, map_df
     except FileNotFoundError as e:
         st.error(f"Error loading data: {e}. Please ensure all parquet files are in the correct directory.")
         return None, None, None, None, None
 
+# Load data once
 twitch_df, users_df, videos_df, comments_df, map_df = load_data()
 
 if twitch_df is None:
     st.stop()
+
+# --- PRECOMPUTE AGGREGATIONS ---
+@st.cache_data
+def precompute_aggregations(_twitch_df, _videos_df, _comments_df):
+    """Pre-aggregate heavy computations to reduce memory pressure."""
+    
+    # Daily aggregations
+    twitch_daily = _twitch_df.set_index('collection_timestamp').resample('D').size().reset_index(name='count')
+    twitch_daily['source'] = 'Twitch Snapshots'
+    twitch_daily.rename(columns={'collection_timestamp': 'date'}, inplace=True)
+
+    videos_daily = _videos_df.set_index('published_at').resample('D').size().reset_index(name='count')
+    videos_daily['source'] = 'YouTube Videos'
+    videos_daily.rename(columns={'published_at': 'date'}, inplace=True)
+    
+    comments_daily = _comments_df.set_index('published_at').resample('D').size().reset_index(name='count')
+    comments_daily['source'] = 'YouTube Comments'
+    comments_daily.rename(columns={'published_at': 'date'}, inplace=True)
+    
+    combined_daily = pd.concat([twitch_daily, videos_daily, comments_daily], ignore_index=True)
+    
+    # Twitch metrics per user
+    twitch_metrics = _twitch_df.groupby('user_id').agg({
+        'viewer_count': 'mean',
+        'started_at': 'count'
+    }).rename(columns={'viewer_count': 'avg_viewers', 'started_at': 'stream_count'}).reset_index()
+    
+    # Comments per video
+    comments_per_video = _comments_df.groupby('video_id').size().reset_index(name='comment_count')
+    
+    return combined_daily, twitch_metrics, comments_per_video
+
+combined_daily, twitch_metrics, comments_per_video = precompute_aggregations(twitch_df, videos_df, comments_df)
 
 # --- HELPER FUNCTION: STATS FORMATTER ---
 def display_stats(r, rho, slope, r2, p_val):
@@ -94,28 +143,14 @@ if page == "Dashboard Home":
     # Daily Collection Volume
     st.subheader("Daily Data Collection Volume")
     
-    # Aggregate Daily Counts
-    twitch_daily = twitch_df.set_index('collection_timestamp').resample('D').size().reset_index(name='count')
-    twitch_daily['source'] = 'Twitch Snapshots'
-    twitch_daily.rename(columns={'collection_timestamp': 'date'}, inplace=True)
-
-    videos_daily = videos_df.set_index('published_at').resample('D').size().reset_index(name='count')
-    videos_daily['source'] = 'YouTube Videos'
-    videos_daily.rename(columns={'published_at': 'date'}, inplace=True)
-    
-    comments_daily = comments_df.set_index('published_at').resample('D').size().reset_index(name='count')
-    comments_daily['source'] = 'YouTube Comments'
-    comments_daily.rename(columns={'published_at': 'date'}, inplace=True)
-    
-    combined_daily = pd.concat([twitch_daily, videos_daily, comments_daily])
-    
     # Date Filter for Main Graph
     if not combined_daily.empty:
-        combined_daily['date'] = pd.to_datetime(combined_daily['date'])
-        combined_daily['date_only'] = combined_daily['date'].dt.date
+        combined_daily_copy = combined_daily.copy()
+        combined_daily_copy['date'] = pd.to_datetime(combined_daily_copy['date'])
+        combined_daily_copy['date_only'] = combined_daily_copy['date'].dt.date
         
-        min_date = combined_daily['date_only'].min()
-        max_date = combined_daily['date_only'].max()
+        min_date = combined_daily_copy['date_only'].min()
+        max_date = combined_daily_copy['date_only'].max()
 
         default_start_date = max_date - timedelta(days=90)
         if default_start_date < min_date:
@@ -131,10 +166,10 @@ if page == "Dashboard Home":
         
         if isinstance(date_range, tuple) and len(date_range) == 2:
             start_date, end_date = date_range
-            mask = (combined_daily['date_only'] >= start_date) & (combined_daily['date_only'] <= end_date)
-            chart_data = combined_daily.loc[mask]
+            mask = (combined_daily_copy['date_only'] >= start_date) & (combined_daily_copy['date_only'] <= end_date)
+            chart_data = combined_daily_copy.loc[mask]
         else:
-            chart_data = combined_daily
+            chart_data = combined_daily_copy
             
         chart = alt.Chart(chart_data).mark_bar().encode(
             x='date:T',
@@ -143,7 +178,7 @@ if page == "Dashboard Home":
             tooltip=['date', 'count', 'source']
         ).interactive()
         
-        st.altair_chart(chart, width='stretch')
+        st.altair_chart(chart, use_container_width=True)
     else:
         st.info("No data available to display.")
 
@@ -154,43 +189,43 @@ if page == "Dashboard Home":
 
     st.subheader("Toxicity Distribution (Histogram)")
     
-    # Toxicity Histogram
-    if not comments_df.empty:
-        hist_data = comments_df['toxicity_score'].value_counts(bins=50, sort=False).reset_index()
-        hist_data.columns = ['range', 'count']
-        hist_data['toxicity_score'] = hist_data['range'].apply(lambda x: x.left)
+    # Toxicity Histogram - sample for performance
+    if not comments_df.empty and 'toxicity_score' in comments_df.columns:
+        # Sample data if too large
+        sample_size = min(50000, len(comments_df))
+        toxicity_sample = comments_df['toxicity_score'].dropna().sample(n=sample_size, random_state=42)
+        
+        hist_data = pd.DataFrame({'toxicity_score': toxicity_sample})
         
         hist_chart = alt.Chart(hist_data).mark_bar().encode(
             x=alt.X("toxicity_score:Q", bin=alt.Bin(maxbins=50), title="Toxicity Score"),
-            y=alt.Y('count:Q', title='Count'),
-            tooltip=['toxicity_score', 'count']
-        ).properties(title="Distribution of Comment Toxicity (Binned)")
+            y=alt.Y('count()', title='Count'),
+            tooltip=[alt.Tooltip('toxicity_score:Q', bin=True), alt.Tooltip('count()')]
+        ).properties(title=f"Distribution of Comment Toxicity (Sample: {sample_size:,} comments)")
         
-        st.altair_chart(hist_chart, width='stretch')
+        st.altair_chart(hist_chart, use_container_width=True)
     else:
         st.warning("No comment data for toxicity histogram.")
 
     st.subheader("Cross-Platform Engagement (Scatter Plot)")
     if not twitch_df.empty and not comments_df.empty:
-        avg_twitch = twitch_df.groupby('user_id')['viewer_count'].mean().reset_index()
-        comments_per_video = comments_df.groupby('video_id').size().reset_index(name='comment_count')
-        video_counts = pd.merge(videos_df, comments_per_video, on='video_id')
+        video_counts = pd.merge(videos_df[['video_id', 'channel_id']], comments_per_video, on='video_id')
         avg_yt = video_counts.groupby('channel_id')['comment_count'].mean().reset_index()
         
         # Merge
         user_map_mini = pd.merge(users_df[['user_id', 'login_name', 'display_name']], map_df, left_on='login_name', right_on='twitch_login_name')
         
-        merged_metrics = pd.merge(avg_twitch, user_map_mini, on='user_id')
+        merged_metrics = pd.merge(twitch_metrics, user_map_mini, on='user_id')
         merged_metrics = pd.merge(merged_metrics, avg_yt, left_on='youtube_channel_id', right_on='channel_id')
         
         if not merged_metrics.empty:
             scatter_chart = alt.Chart(merged_metrics).mark_circle(size=60).encode(
-                x=alt.X('viewer_count', scale=alt.Scale(type='log', nice=True), title='Avg Twitch Viewers (Log)'),
+                x=alt.X('avg_viewers', scale=alt.Scale(type='log', nice=True), title='Avg Twitch Viewers (Log)'),
                 y=alt.Y('comment_count', scale=alt.Scale(type='log', nice=True), title='Avg YouTube Comments (Log)'),
-                tooltip=['display_name', 'viewer_count', 'comment_count']
+                tooltip=['display_name', 'avg_viewers', 'comment_count']
             ).properties(title="Twitch Viewership vs. YouTube Engagement").interactive()
             
-            st.altair_chart(scatter_chart, width='stretch')
+            st.altair_chart(scatter_chart, use_container_width=True)
         else:
             st.warning("Insufficient overlap data for scatter plot.")
 
@@ -199,11 +234,15 @@ if page == "Dashboard Home":
     
     with col_a:
         st.markdown("**Top Twitch Keywords**")
-        if not twitch_df.empty:
+        if not twitch_df.empty and 'stream_title' in twitch_df.columns:
+            # Sample titles for performance
+            sample_size = min(10000, len(twitch_df))
+            title_sample = twitch_df['stream_title'].dropna().sample(n=sample_size, random_state=42)
+            
             stop_words = "english"
             vec = CountVectorizer(stop_words=stop_words, max_features=10)
             try:
-                bow = vec.fit_transform(twitch_df['stream_title'].dropna().astype(str))
+                bow = vec.fit_transform(title_sample.astype(str))
                 word_counts = pd.DataFrame({'word': vec.get_feature_names_out(), 'count': bow.toarray().sum(axis=0)})
                 word_counts = word_counts.sort_values('count', ascending=False)
                 
@@ -212,7 +251,7 @@ if page == "Dashboard Home":
                     y=alt.Y('word', sort='-x', title='Keyword'),
                     tooltip=['word', 'count']
                 )
-                st.altair_chart(bar_twitch, width='stretch')
+                st.altair_chart(bar_twitch, use_container_width=True)
             except ValueError:
                 st.info("Not enough text data for Twitch analysis.")
 
@@ -230,7 +269,7 @@ if page == "Dashboard Home":
                     y=alt.Y('word', sort='-x', title='Keyword'),
                     tooltip=['word', 'count']
                 )
-                st.altair_chart(bar_yt, width='stretch')
+                st.altair_chart(bar_yt, use_container_width=True)
             except ValueError:
                 st.info("Not enough text data for YouTube analysis.")
 
@@ -244,13 +283,15 @@ elif page == "RQ1: Temporal Toxicity":
     
     channel_id = merged_map[merged_map['display_name'] == creator]['youtube_channel_id'].values[0]
     creator_vids = videos_df[videos_df['channel_id'] == channel_id]['video_id']
+    
+    # Filter comments for this creator only
     df = comments_df[comments_df['video_id'].isin(creator_vids)].copy()
     
     if not df.empty:
         # Aggregation
         granularity = st.sidebar.select_slider("Granularity", ["D", "W", "M"], value="W")
         timeline = df.set_index('published_at').resample(granularity)['toxicity_score'].agg(['mean', 'count']).reset_index()
-        timeline.rename(columns={'mean': 'avg_toxicity', 'count': 'comment_volume'}, inplace=True) # Rename for clarity
+        timeline.rename(columns={'mean': 'avg_toxicity', 'count': 'comment_volume'}, inplace=True)
 
         # Statistics
         mean_tox = df['toxicity_score'].mean()
@@ -271,9 +312,9 @@ elif page == "RQ1: Temporal Toxicity":
         )
         bar = base.mark_bar(opacity=0.3).encode(
             y=alt.Y('comment_volume', title='Volume'),
-             tooltip=['published_at', 'comment_volume']
+            tooltip=['published_at', 'comment_volume']
         )
-        st.altair_chart(alt.layer(bar, line).resolve_scale(y='independent').interactive(), width='stretch')
+        st.altair_chart(alt.layer(bar, line).resolve_scale(y='independent').interactive(), use_container_width=True)
 
         # Insights
         st.markdown("### Insights")
@@ -290,20 +331,18 @@ elif page == "RQ2: Cross-Platform Predictor":
     
     st.sidebar.subheader("Regression Parameters")
     
-    # Aggregate Twitch Metrics per User
-    twitch_metrics = twitch_df.groupby('user_id').agg({
-        'viewer_count': 'mean',
-        'started_at': 'count' # Proxy for frequency/duration
-    }).rename(columns={'viewer_count': 'avg_viewers', 'started_at': 'stream_count'}).reset_index()
-    
     # Aggregate YouTube Metrics per Channel
-    comments_with_channel = pd.merge(comments_df, videos_df[['video_id', 'channel_id']], on='video_id')
+    comments_with_channel = pd.merge(
+        comments_df[['video_id', 'toxicity_score', 'like_count']], 
+        videos_df[['video_id', 'channel_id']], 
+        on='video_id'
+    )
     
     yt_metrics = comments_with_channel.groupby('channel_id').agg({
-        'comment_id': 'count',
+        'video_id': 'count',
         'toxicity_score': 'mean',
         'like_count': 'mean'
-    }).rename(columns={'comment_id': 'total_comments', 'toxicity_score': 'avg_channel_toxicity', 'like_count': 'avg_comment_likes'}).reset_index()
+    }).rename(columns={'video_id': 'total_comments', 'toxicity_score': 'avg_channel_toxicity', 'like_count': 'avg_comment_likes'}).reset_index()
     
     # Map Twitch User ID to YouTube Channel ID
     user_map = pd.merge(users_df[['user_id', 'login_name', 'display_name']], map_df, left_on='login_name', right_on='twitch_login_name')
@@ -356,7 +395,7 @@ elif page == "RQ2: Cross-Platform Predictor":
             # Regression Line
             reg_line = scatter.transform_regression(x_metric, y_metric).mark_line(color='red')
             
-            st.altair_chart(scatter + reg_line, width='stretch')
+            st.altair_chart(scatter + reg_line, use_container_width=True)
             
             # Data Table
             st.markdown("### Creator Data")
@@ -370,15 +409,15 @@ elif page == "RQ3: Content Themes":
     keyword = st.sidebar.text_input("Keyword", "drama").lower()
     
     df = videos_df.copy()
-    df['has_keyword'] = df['video_title'].str.lower().str.contains(keyword).fillna(False)
+    df['has_keyword'] = df['video_title'].str.lower().str.contains(keyword, na=False)
     
     # Merge Counts
-    counts = comments_df.groupby('video_id').size().reset_index(name='comments')
-    df = pd.merge(df, counts, on='video_id', how='left').fillna(0)
+    df = pd.merge(df, comments_per_video, on='video_id', how='left')
+    df['comment_count'] = df['comment_count'].fillna(0)
     
     if df['has_keyword'].sum() > 0:
-        group_yes = df[df['has_keyword']]['comments']
-        group_no = df[~df['has_keyword']]['comments']
+        group_yes = df[df['has_keyword']]['comment_count']
+        group_no = df[~df['has_keyword']]['comment_count']
         
         st.markdown(f"### Statistical Test: Does '{keyword}' drive engagement?")
         
@@ -387,7 +426,7 @@ elif page == "RQ3: Content Themes":
         
         m1 = group_yes.mean()
         m2 = group_no.mean()
-        lift = ((m1 - m2) / m2) * 100
+        lift = ((m1 - m2) / m2) * 100 if m2 > 0 else 0
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Avg Comments (With)", f"{m1:.1f}")
@@ -399,35 +438,41 @@ elif page == "RQ3: Content Themes":
         else:
             st.warning(f"**Not Significant** (p = {p_val:.4f}). The difference might be due to chance.")
 
-        # Comparative Density Plot
+        # Comparative Density Plot - sample for performance
         st.subheader("Engagement Distribution by Keyword Presence")
-        chart_data = df[['has_keyword', 'comments']].copy()
+        
+        # Sample data if too large
+        sample_size = min(5000, len(df))
+        chart_data = df[['has_keyword', 'comment_count']].sample(n=sample_size, random_state=42)
         chart_data['Type'] = chart_data['has_keyword'].map({True: 'With Keyword', False: 'Without Keyword'})
         
         chart = alt.Chart(chart_data).transform_density(
-            'comments',
-            as_=['comments', 'density'],
+            'comment_count',
+            as_=['comment_count', 'density'],
             groupby=['Type']
         ).mark_area(opacity=0.5).encode(
-            x=alt.X('comments:Q', title='Comment Count'),
+            x=alt.X('comment_count:Q', title='Comment Count'),
             y='density:Q',
             color='Type:N'
         )
-        st.altair_chart(chart, width='stretch')
+        st.altair_chart(chart, use_container_width=True)
         
         # Snowball Sampling
         st.subheader(f"Snowball Sampling: What co-occurs with '{keyword}'?")
         try:
-            subset = df[df['has_keyword']]['video_title']
-            vec = CountVectorizer(stop_words='english', max_features=15)
-            bow = vec.fit_transform(subset)
-            words = pd.DataFrame({'word': vec.get_feature_names_out(), 'count': bow.toarray().sum(axis=0)})
-            words = words[words['word'] != keyword].sort_values('count', ascending=False)
-            
-            bar = alt.Chart(words).mark_bar().encode(
-                x='count:Q', y=alt.Y('word:N', sort='-x')
-            )
-            st.altair_chart(bar, width='stretch')
+            subset = df[df['has_keyword']]['video_title'].dropna()
+            if len(subset) > 0:
+                vec = CountVectorizer(stop_words='english', max_features=15)
+                bow = vec.fit_transform(subset.astype(str))
+                words = pd.DataFrame({'word': vec.get_feature_names_out(), 'count': bow.toarray().sum(axis=0)})
+                words = words[words['word'] != keyword].sort_values('count', ascending=False)
+                
+                bar = alt.Chart(words).mark_bar().encode(
+                    x='count:Q', y=alt.Y('word:N', sort='-x')
+                )
+                st.altair_chart(bar, use_container_width=True)
+            else:
+                st.info("Not enough data for snowball sampling.")
         except:
             st.info("Not enough data for snowball sampling.")
 
