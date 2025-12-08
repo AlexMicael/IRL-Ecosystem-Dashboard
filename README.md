@@ -10,7 +10,10 @@ Using a robust data pipeline, we collected weeks of data including stream metada
 
 🔗 [Streamlit Live Demo](https://alexmicael-irl-ecosystem-dashboard-app-wgmceg.streamlit.app/)
 
-![Streamlit Dashboard Home](assets\dashboard_home.png)
+<div align="center">
+  <img src="assets\dashboard_home.png" width="100%" alt="Streamlit Dashboard Screenshot" />
+</div>
+
 
 ## Research Questions
 This dashboard allows you to interactively explore the answers to our three primary research questions:
