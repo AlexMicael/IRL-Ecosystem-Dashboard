@@ -23,19 +23,29 @@ st.set_page_config(
 def load_data():
     """Loads and pre-processes all datasets."""
     try:
-        twitch_df = pd.read_csv("twitch_streams_data.csv")
+        # Twitch Stream Snapshots
+        twitch_df = pd.read_parquet("data/twitch_streams_data.parquet")
         twitch_df['collection_timestamp'] = pd.to_datetime(twitch_df['collection_timestamp'], utc=True).dt.tz_localize(None)
-        users_df = pd.read_csv("twitch_users_data.csv")
-        videos_df = pd.read_csv("youtube_videos_data.csv")
+        
+        # Twitch Users
+        users_df = pd.read_parquet("data/twitch_users_data.parquet")
+        
+        # YouTube Videos
+        videos_df = pd.read_parquet("data/youtube_videos_data.parquet")
         videos_df['published_at'] = pd.to_datetime(videos_df['published_at'], utc=True).dt.tz_localize(None)
-        comments_df = pd.read_csv("youtube_comments_data.csv")
-        comments_df['published_at'] = pd.to_datetime(comments_df['published_at'], utc=True).dt.tz_localize(None)
-        comments_df['toxicity_score'] = pd.to_numeric(comments_df['toxicity_score'], errors='coerce')
-        map_df = pd.read_csv("streamer_map.csv")
+        
+        # Streamer Mapping
+        map_df = pd.read_parquet("data/streamer_map.parquet")
+
+        # YouTube Comments (Split into 2 Parts)
+        comments_part1 = pd.read_parquet("data/youtube_comments_data_part1.parquet")
+        comments_part2 = pd.read_parquet("data/youtube_comments_data_part2.parquet")
+        comments_df = pd.concat([comments_part1, comments_part2])
+        comments_df['published_at'] = pd.to_datetime(comments_df['published_at'], utc=True, errors='coerce').dt.tz_localize(None)
         
         return twitch_df, users_df, videos_df, comments_df, map_df
     except FileNotFoundError as e:
-        st.error(f"Error loading data: {e}. Please ensure CSV files are in the same directory.")
+        st.error(f"Error loading data: {e}. Please ensure all parquet files are in the correct directory.")
         return None, None, None, None, None
 
 twitch_df, users_df, videos_df, comments_df, map_df = load_data()
