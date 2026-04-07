@@ -6,7 +6,7 @@
 ## Overview
 This project investigates the "In Real Life" (IRL) streaming ecosystem, focusing on creators who maintain a dual presence on Twitch and YouTube.
 
-Using a robust data pipeline, we collected weeks of data including stream metadata, video metrics, and user comments. This interactive dashboard allows users to explore the statistical relationships between these platforms, analyze community toxicity, and identify engagement drivers.
+Using a [robust data pipeline](https://github.com/AlexMicael/IRL-Ecosystem-Pipeline), we collected weeks of data including stream metadata, video metrics, and user comments. This interactive dashboard allows users to explore the statistical relationships between these platforms, analyze community toxicity, and identify engagement drivers.
 
 🔗 [Streamlit Live Demo](https://alexmicael-irl-ecosystem-dashboard-app-wgmceg.streamlit.app/)
 
